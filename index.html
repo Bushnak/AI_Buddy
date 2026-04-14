@@ -1,86 +1,145 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>AIO 2026 AI Buddy</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Buddy Pro | AIO 2026</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background: #0f172a; color: white; font-family: sans-serif; text-align: center; padding: 20px; }
-        .card { background: #1e293b; padding: 30px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        #word { font-size: 60px; font-weight: 800; color: #38bdf8; margin: 20px 0; }
-        .btn { background: #0ea5e9; color: white; border: none; padding: 15px 40px; border-radius: 12px; font-weight: bold; cursor: pointer; }
-        #status { color: #94a3b8; margin-top: 10px; }
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&display=swap');
+        body { font-family: 'Outfit', sans-serif; background: #020617; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .glow-green { box-shadow: 0 0 30px rgba(34, 197, 94, 0.5); border-color: #22c55e; }
+        .glow-red { box-shadow: 0 0 30px rgba(239, 68, 68, 0.5); border-color: #ef4444; }
+        .mic-active { animation: pulse-red 1.5s infinite; }
+        @keyframes pulse-red { 0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); } 70% { transform: scale(1.05); box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); } 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
     </style>
 </head>
-<body>
+<body class="min-h-screen flex items-center justify-center p-4">
 
-    <div class="card">
-        <h1>AI Buddy</h1>
-        <button id="connect" class="btn">CONNECT ARDUINO</button>
-        <div id="word">READY</div>
-        <p id="status">Status: Disconnected</p>
+    <div class="w-full max-w-md glass rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden text-center">
+        <header class="mb-10">
+            <h1 class="text-slate-400 text-xs font-bold uppercase tracking-[0.3em] mb-2">Smart Education 2026</h1>
+            <div class="text-3xl font-black text-white">AI BUDDY <span class="text-blue-500">PRO</span></div>
+        </header>
+
+        <div id="mainDisplay" class="bg-slate-900/50 rounded-3xl p-10 text-center border border-slate-700/50 mb-8 transition-all duration-500">
+            <div id="statusText" class="text-blue-400 text-sm font-bold mb-4 uppercase tracking-tighter">System Offline</div>
+            <div id="wordDisplay" class="text-6xl font-black text-white tracking-tighter opacity-20">READY</div>
+        </div>
+
+        <button id="btnConnect" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-2xl transition-all shadow-xl shadow-blue-900/20 active:scale-95 flex items-center justify-center gap-3">
+            PAIR WITH JDY-33
+        </button>
+
+        <div id="micIcon" class="hidden flex flex-col items-center mt-6">
+            <div class="w-16 h-16 bg-red-500 rounded-full flex items-center justify-center mic-active">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m8 0h-8m4-14a3 3 0 00-3 3v5a3 3 0 006 0V5a3 3 0 00-3-3z" />
+                </svg>
+            </div>
+            <span class="text-red-500 text-xs font-bold mt-3 uppercase tracking-widest">Listening...</span>
+        </div>
     </div>
 
     <script>
-        let port, reader, inputDone, outputDone;
-        const words = ["APPLE", "BANANA", "ORANGE", "COMPUTER"];
-        let idx = -1;
+        // JDY-33 Standard BLE UUIDs
+        const SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb';
+        const CHAR_UUID = '0000ffe1-0000-1000-8000-00805f9b34fb';
+        
+        let btChar;
+        const words = ["APPLE", "BANANA", "ORANGE", "CHERRY", "COMPUTER"];
+        let currentIndex = 0;
 
-        const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+        const btnConnect = document.getElementById('btnConnect');
+        const statusText = document.getElementById('statusText');
+        const wordDisplay = document.getElementById('wordDisplay');
+        const micIcon = document.getElementById('micIcon');
+        const mainDisplay = document.getElementById('mainDisplay');
+
+        // Check for Web Speech API support
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            statusText.innerText = "Browser not supported";
+            btnConnect.disabled = true;
+        }
+        const recognition = new SpeechRecognition();
         recognition.lang = 'en-US';
 
-        document.getElementById('connect').onclick = async () => {
+        btnConnect.onclick = async () => {
             try {
-                // Request Bluetooth Device
+                statusText.innerText = "Scanning...";
                 const device = await navigator.bluetooth.requestDevice({
-                    filters: [{ services: ['00001101-0000-1000-8000-00805f9b34fb'] }],
-                    optionalServices: ['00001101-0000-1000-8000-00805f9b34fb']
+                    filters: [{ namePrefix: 'JDY' }],
+                    optionalServices: [SERVICE_UUID]
                 });
                 
+                statusText.innerText = "Connecting...";
                 const server = await device.gatt.connect();
-                const service = await server.getPrimaryService('00001101-0000-1000-8000-00805f9b34fb');
-                const char = await service.getCharacteristic('00001101-0000-1000-8000-00805f9b34fb');
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                btChar = await service.getCharacteristic(CHAR_UUID);
 
-                document.getElementById('status').innerText = "Connected to HC-05!";
-                
-                // Listen for "NEXT" from Arduino
-                await char.startNotifications();
-                char.addEventListener('characteristicvaluechanged', (event) => {
-                    const val = new TextDecoder().decode(event.target.value);
-                    if(val.includes("NEXT")) {
-                        idx = (idx + 1) % words.length;
-                        startAI(char);
-                    }
+                await btChar.startNotifications();
+                btChar.addEventListener('characteristicvaluechanged', (e) => {
+                    const val = new TextDecoder().decode(e.target.value).trim();
+                    if(val.includes("NEXT")) startRound();
                 });
-            } catch (e) { alert("Error: " + e); }
+
+                statusText.innerText = "Connected";
+                btnConnect.classList.add('hidden');
+                wordDisplay.classList.remove('opacity-20');
+                speak("Ready. Press next on your arduino.");
+            } catch (err) {
+                statusText.innerText = "Error: " + err.message;
+            }
         };
 
-        async function startAI(char) {
-            const target = words[idx];
-            document.getElementById('word').innerText = target;
+        function startRound() {
+            const target = words[currentIndex];
+            currentIndex = (currentIndex + 1) % words.length;
+            wordDisplay.innerText = target;
+            mainDisplay.classList.remove('glow-green', 'glow-red');
             
-            // Speak Word
-            const msg = new SpeechSynthesisUtterance("The word is " + target);
-            window.speechSynthesis.speak(msg);
-
-            // Signal Arduino: Yellow LED ON
-            await char.writeValue(new TextEncoder().encode("L"));
+            speak("The word is " + target);
+            sendToArduino("L"); // Signal Yellow LED On
 
             setTimeout(() => {
+                micIcon.classList.remove('hidden');
+                statusText.innerText = "Listening...";
                 recognition.start();
-            }, 1500);
+            }, 2000);
+        }
 
-            recognition.onresult = async (event) => {
-                const result = event.results[0][0].transcript.toUpperCase();
-                await char.writeValue(new TextEncoder().encode("X")); // Yellow OFF
+        recognition.onresult = (event) => {
+            const heard = event.results[0][0].transcript.toUpperCase();
+            micIcon.classList.add('hidden');
+            sendToArduino("X"); // Signal Yellow LED Off
 
-                if(result.includes(target)) {
-                    document.getElementById('status').innerText = "Correct!";
-                    await char.writeValue(new TextEncoder().encode("G")); // Green
-                } else {
-                    document.getElementById('status').innerText = "Wrong: " + result;
-                    await char.writeValue(new TextEncoder().encode("R")); // Red
+            if (heard.includes(wordDisplay.innerText)) {
+                statusText.innerText = "Perfect!";
+                mainDisplay.classList.add('glow-green');
+                sendToArduino("G"); // Signal Green LED
+                speak("Correct!");
+            } else {
+                statusText.innerText = "Not quite...";
+                mainDisplay.classList.add('glow-red');
+                sendToArduino("R"); // Signal Red LED
+                speak("Try again.");
+            }
+        };
+
+        function speak(text) {
+            window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+        }
+
+        async function sendToArduino(str) {
+            if (btChar) {
+                try {
+                    await btChar.writeValue(new TextEncoder().encode(str));
+                } catch (e) {
+                    console.error("BT Write Error", e);
                 }
-            };
+            }
         }
     </script>
 </body>
