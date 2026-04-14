@@ -50,6 +50,7 @@
         let btChar;
         const words = ["APPLE", "BANANA", "ORANGE", "CHERRY", "COMPUTER"];
         let currentIndex = 0;
+        let isListening = false;
 
         const btnConnect = document.getElementById('btnConnect');
         const statusText = document.getElementById('statusText');
@@ -63,8 +64,12 @@
             statusText.innerText = "Browser not supported";
             btnConnect.disabled = true;
         }
+        
         const recognition = new SpeechRecognition();
         recognition.lang = 'en-US';
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
 
         btnConnect.onclick = async () => {
             try {
@@ -82,6 +87,7 @@
                 await btChar.startNotifications();
                 btChar.addEventListener('characteristicvaluechanged', (e) => {
                     const val = new TextDecoder().decode(e.target.value).trim();
+                    console.log("From Arduino:", val);
                     if(val.includes("NEXT")) startRound();
                 });
 
@@ -95,23 +101,37 @@
         };
 
         function startRound() {
+            if (isListening) return; // Prevent overlapping rounds
+
             const target = words[currentIndex];
             currentIndex = (currentIndex + 1) % words.length;
             wordDisplay.innerText = target;
             mainDisplay.classList.remove('glow-green', 'glow-red');
             
+            statusText.innerText = "Get ready...";
             speak("The word is " + target);
-            sendToArduino("L"); // Signal Yellow LED On
+            
+            // Signal Arduino: Listening mode (Yellow LED On)
+            sendToArduino("L"); 
 
+            // Delay microphone until speech finishes
             setTimeout(() => {
-                micIcon.classList.remove('hidden');
-                statusText.innerText = "Listening...";
-                recognition.start();
+                try {
+                    isListening = true;
+                    micIcon.classList.remove('hidden');
+                    statusText.innerText = "Listening...";
+                    recognition.start();
+                } catch(e) {
+                    console.error("Recognition already started", e);
+                }
             }, 2000);
         }
 
         recognition.onresult = (event) => {
+            isListening = false;
             const heard = event.results[0][0].transcript.toUpperCase();
+            console.log("Heard:", heard);
+            
             micIcon.classList.add('hidden');
             sendToArduino("X"); // Signal Yellow LED Off
 
@@ -121,15 +141,28 @@
                 sendToArduino("G"); // Signal Green LED
                 speak("Correct!");
             } else {
-                statusText.innerText = "Not quite...";
+                statusText.innerText = "Heard: " + heard;
                 mainDisplay.classList.add('glow-red');
                 sendToArduino("R"); // Signal Red LED
                 speak("Try again.");
             }
         };
 
+        recognition.onspeechend = () => {
+            recognition.stop();
+        };
+
+        recognition.onerror = (event) => {
+            isListening = false;
+            micIcon.classList.add('hidden');
+            sendToArduino("X");
+            statusText.innerText = "Error: " + event.error;
+            console.error("Speech Error:", event.error);
+        };
+
         function speak(text) {
-            window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+            const utterance = new SpeechSynthesisUtterance(text);
+            window.speechSynthesis.speak(utterance);
         }
 
         async function sendToArduino(str) {
