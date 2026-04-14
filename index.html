@@ -26,6 +26,7 @@
         <div id="mainDisplay" class="bg-slate-900/50 rounded-3xl p-10 text-center border border-slate-700/50 mb-8 transition-all duration-500">
             <div id="statusText" class="text-blue-400 text-sm font-bold mb-4 uppercase tracking-tighter">System Offline</div>
             <div id="wordDisplay" class="text-6xl font-black text-white tracking-tighter opacity-20">READY</div>
+            <div id="liveFeedback" class="text-[10px] text-slate-500 mt-2 h-4 overflow-hidden"></div>
         </div>
 
         <button id="btnConnect" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-2xl transition-all shadow-xl shadow-blue-900/20 active:scale-95 flex items-center justify-center gap-3">
@@ -39,7 +40,7 @@
                 </svg>
             </div>
             <span class="text-red-500 text-xs font-bold uppercase tracking-widest mb-4">Listening...</span>
-            <button id="btnAbort" class="text-slate-500 text-[10px] underline uppercase tracking-widest hover:text-white">Cancel / Restart Mic</button>
+            <button id="btnAbort" class="text-slate-500 text-[10px] underline uppercase tracking-widest hover:text-white">Cancel / Force Stop</button>
         </div>
     </div>
 
@@ -60,6 +61,7 @@
         const micContainer = document.getElementById('micContainer');
         const mainDisplay = document.getElementById('mainDisplay');
         const btnAbort = document.getElementById('btnAbort');
+        const liveFeedback = document.getElementById('liveFeedback');
 
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
@@ -69,8 +71,8 @@
         
         const recognition = new SpeechRecognition();
         recognition.lang = 'en-US';
-        recognition.continuous = true; // Changed to true to keep it alive
-        recognition.interimResults = true; // Catch words as they are spoken
+        recognition.continuous = false; // False is often more stable for single words
+        recognition.interimResults = true; 
         recognition.maxAlternatives = 1;
 
         btnConnect.onclick = async () => {
@@ -102,25 +104,30 @@
         };
 
         btnAbort.onclick = () => {
+            recognition.abort();
             handleNoMatch("Reset by User");
         };
 
         function startRound() {
-            if (isListening) recognition.stop(); 
-
+            // Clean up state
             finalTriggered = false;
+            isListening = false;
+            if (failsafeTimer) clearTimeout(failsafeTimer);
+            try { recognition.abort(); } catch(e) {} // Ensure mic is totally released
+
             const target = words[currentIndex];
             currentIndex = (currentIndex + 1) % words.length;
             wordDisplay.innerText = target;
+            liveFeedback.innerText = "";
             mainDisplay.classList.remove('glow-green', 'glow-red');
             
             statusText.innerText = "Listen...";
             speak("The word is " + target);
             
+            // Send Yellow command
             sendToArduino("L"); 
 
-            if (failsafeTimer) clearTimeout(failsafeTimer);
-
+            // Wait for text-to-speech to finish before opening mic
             setTimeout(() => {
                 try {
                     isListening = true;
@@ -128,17 +135,20 @@
                     statusText.innerText = "Listening...";
                     recognition.start();
 
-                    // Failsafe shortened to 10s for better responsiveness
+                    // Failsafe timer
                     failsafeTimer = setTimeout(() => {
                         if (isListening) {
-                            handleNoMatch("Time out");
+                            console.log("Failsafe: Auto-stopping due to silence.");
+                            recognition.stop();
                         }
-                    }, 10000);
+                    }, 12000); // 12 second window
 
                 } catch(e) {
                     console.error("Mic start failed", e);
+                    isListening = false;
+                    micContainer.classList.add('hidden');
                 }
-            }, 1800);
+            }, 2000);
         }
 
         recognition.onresult = (event) => {
@@ -149,9 +159,8 @@
                 interimTranscript += event.results[i][0].transcript.toUpperCase();
             }
 
-            console.log("Live Hearing:", interimTranscript);
+            liveFeedback.innerText = "I heard: " + interimTranscript;
             
-            // If the target word appears anywhere in the interim or final results
             if (interimTranscript.includes(wordDisplay.innerText)) {
                 finalTriggered = true;
                 success();
@@ -167,16 +176,15 @@
             sendToArduino("X"); 
             sendToArduino("G"); 
 
-            statusText.innerText = "Correct!";
+            statusText.innerText = "Perfect!";
             mainDisplay.classList.add('glow-green');
-            speak("Correct!");
+            speak("Excellent!");
         }
 
         function handleNoMatch(reason) {
             isListening = false;
             finalTriggered = false;
             if (failsafeTimer) clearTimeout(failsafeTimer);
-            recognition.stop();
             
             micContainer.classList.add('hidden');
             sendToArduino("X"); 
@@ -184,16 +192,29 @@
             
             statusText.innerText = reason || "Try again";
             mainDisplay.classList.add('glow-red');
-            speak("Not quite. Try again.");
+            speak("Try again.");
         }
 
+        recognition.onend = () => {
+            // If the mic closed but we didn't trigger success, it's a fail/timeout
+            if (isListening && !finalTriggered) {
+                handleNoMatch("I didn't hear that.");
+            }
+            isListening = false;
+            micContainer.classList.add('hidden');
+        };
+
         recognition.onerror = (event) => {
-            if (event.error === 'no-speech' || event.error === 'aborted') return;
-            handleNoMatch("Mic Error");
+            console.error("Speech Error:", event.error);
+            if (event.error === 'no-speech') {
+                handleNoMatch("Silent...");
+            } else if (event.error !== 'aborted') {
+                handleNoMatch("Mic Error");
+            }
         };
 
         function speak(text) {
-            window.speechSynthesis.cancel(); // Stop current speech
+            window.speechSynthesis.cancel(); 
             const utterance = new SpeechSynthesisUtterance(text);
             window.speechSynthesis.speak(utterance);
         }
