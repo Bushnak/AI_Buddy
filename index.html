@@ -1,252 +1,234 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Bluetooth, Mic, MicOff, RefreshCw, ChevronLeft, ChevronRight, CheckCircle, XCircle, AlertCircle, ShieldAlert } from 'lucide-react';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Buddy Pro | AIO 2026</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;900&display=swap');
+        body { font-family: 'Outfit', sans-serif; background: #020617; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .glow-green { box-shadow: 0 0 40px rgba(34, 197, 94, 0.4); border-color: #22c55e; }
+        .glow-red { box-shadow: 0 0 40px rgba(239, 68, 68, 0.4); border-color: #ef4444; }
+        .mic-active { animation: pulse-red 1.5s infinite; }
+        @keyframes pulse-red { 
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); } 
+            70% { transform: scale(1.1); box-shadow: 0 0 0 20px rgba(239, 68, 68, 0); } 
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } 
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
 
-const App = () => {
-  // --- State Management ---
-  const [device, setDevice] = useState(null);
-  const [characteristic, setCharacteristic] = useState(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const [status, setStatus] = useState('Disconnected');
-  const [currentWord, setCurrentWord] = useState('READY');
-  const [feedback, setFeedback] = useState(''); 
-  const [isListening, setIsListening] = useState(false);
-  const [error, setError] = useState(null);
-  const [isSupported, setIsSupported] = useState(true);
+    <div class="w-full max-w-md glass rounded-[3rem] p-10 shadow-2xl relative overflow-hidden text-center border border-white/5">
+        <header class="mb-10">
+            <h1 class="text-blue-500 text-xs font-bold uppercase tracking-[0.4em] mb-2">Smart Education 2026</h1>
+            <div class="text-4xl font-black text-white tracking-tighter">AI BUDDY <span class="text-blue-500">PRO</span></div>
+        </header>
 
-  // Constants
-  const words = ["APPLE", "BANANA", "ORANGE", "CHERRY", "COMPUTER"];
-  const UUID_SERVICE = '00001101-0000-1000-8000-00805f9b34fb'; // Standard SPP
-
-  // Refs for persistent data
-  const charRef = useRef(null);
-
-  // --- Initial Compatibility Check ---
-  useEffect(() => {
-    if (!navigator.bluetooth) {
-      setIsSupported(false);
-      setError("Web Bluetooth is not supported. Use Chrome on Android and ensure you are using HTTPS.");
-    }
-  }, []);
-
-  // --- Bluetooth Functions ---
-  const connectBluetooth = async () => {
-    try {
-      setError(null);
-      setStatus('Requesting device...');
-      
-      const selectedDevice = await navigator.bluetooth.requestDevice({
-        filters: [{ services: [UUID_SERVICE] }],
-        optionalServices: [UUID_SERVICE]
-      });
-
-      setStatus('Connecting to GATT...');
-      const server = await selectedDevice.gatt.connect();
-      
-      setStatus('Getting Service...');
-      const service = await server.getPrimaryService(UUID_SERVICE);
-      
-      setStatus('Getting Characteristics...');
-      const characteristics = await service.getCharacteristics();
-      const mainChar = characteristics[0];
-      
-      setDevice(selectedDevice);
-      setCharacteristic(mainChar);
-      charRef.current = mainChar;
-      setIsConnected(true);
-      setStatus('Connected');
-
-      // Listen for data from Arduino
-      await mainChar.startNotifications();
-      mainChar.addEventListener('characteristicvaluechanged', handleArduinoData);
-
-      selectedDevice.addEventListener('gattserverdisconnected', () => {
-        setIsConnected(false);
-        setStatus('Disconnected');
-      });
-
-    } catch (err) {
-      console.error(err);
-      setError(err.message.includes('User cancelled') ? 'Connection cancelled' : 'Bluetooth Error: ' + err.message);
-      setStatus('Connection Failed');
-    }
-  };
-
-  const sendToArduino = async (code) => {
-    if (!charRef.current) return;
-    try {
-      const encoder = new TextEncoder();
-      await charRef.current.writeValue(encoder.encode(code));
-    } catch (err) {
-      console.error('Send Error:', err);
-    }
-  };
-
-  // --- AI Voice Recognition ---
-  const startSpeechAI = (targetWord) => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      setError("Your browser doesn't support Speech Recognition. Use Chrome on Android.");
-      return;
-    }
-
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-
-    recognition.onstart = () => {
-      setIsListening(true);
-      setFeedback('Listening...');
-      sendToArduino('L'); 
-    };
-
-    recognition.onresult = (event) => {
-      const result = event.results[0][0].transcript.toUpperCase();
-      console.log('Heard:', result);
-      
-      sendToArduino('X'); 
-
-      if (result.includes(targetWord)) {
-        handleSuccess();
-      } else {
-        handleFailure(result);
-      }
-    };
-
-    recognition.onerror = (event) => {
-      setIsListening(false);
-      setFeedback('Recognition Error');
-      setError("Speech Error: " + event.error);
-      sendToArduino('X');
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    recognition.start();
-  };
-
-  const handleSuccess = () => {
-    setFeedback('CORRECT!');
-    sendToArduino('G'); 
-    speakText("Correct! Well done.");
-  };
-
-  const handleFailure = (heard) => {
-    setFeedback(`I heard: ${heard}`);
-    sendToArduino('R'); 
-    speakText("Not quite. Try again.");
-  };
-
-  const speakText = (text) => {
-    const utterance = new SpeechSynthesisUtterance(text);
-    window.speechSynthesis.speak(utterance);
-  };
-
-  // --- Arduino Command Parser ---
-  const handleArduinoData = (event) => {
-    const decoder = new TextDecoder();
-    const data = decoder.decode(event.target.value).trim();
-    console.log('Arduino says:', data);
-
-    if (data.includes("TARGET WORD:")) {
-      const parts = data.split(":");
-      const extractedWord = parts[1].trim();
-      setCurrentWord(extractedWord);
-      speakText("The word is " + extractedWord);
-      setTimeout(() => startSpeechAI(extractedWord), 2000);
-    }
-  };
-
-  // --- UI Render ---
-  return (
-    <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col font-sans">
-      {/* Header */}
-      <div className="flex justify-between items-center mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-blue-400 flex items-center gap-2">
-            AI Buddy {!isSupported && <ShieldAlert size={20} className="text-red-500" />}
-          </h1>
-          <p className="text-slate-400 text-sm">{status}</p>
-        </div>
-        <button 
-          onClick={connectBluetooth}
-          disabled={isConnected || !isSupported}
-          className={`p-3 rounded-full transition-all ${
-            isConnected ? 'bg-green-500 shadow-lg' : 
-            !isSupported ? 'bg-slate-800 opacity-50 cursor-not-allowed' : 'bg-blue-600 active:scale-95'
-          }`}
-        >
-          <Bluetooth size={24} />
-        </button>
-      </div>
-
-      {/* Main Display Card */}
-      <div className="flex-1 flex flex-col items-center justify-center gap-8">
-        <div className="w-full max-w-sm bg-slate-800 rounded-3xl p-8 border border-slate-700 shadow-2xl text-center">
-          <span className="text-blue-500 font-semibold tracking-widest text-xs uppercase mb-2 block">Current Target</span>
-          <h2 className="text-6xl font-black tracking-tighter mb-6 text-white">
-            {currentWord}
-          </h2>
-          
-          <div className={`py-3 px-6 rounded-full inline-flex items-center gap-2 text-sm font-medium ${
-            feedback.includes('CORRECT') ? 'bg-green-500/10 text-green-400' : 
-            feedback.includes('heard') ? 'bg-red-500/10 text-red-400' : 'bg-slate-700 text-slate-300'
-          }`}>
-            {feedback.includes('CORRECT') && <CheckCircle size={16} />}
-            {feedback.includes('heard') && <XCircle size={16} />}
-            {feedback || "Waiting for signal..."}
-          </div>
+        <div id="mainDisplay" class="bg-slate-900/80 rounded-[2rem] p-12 text-center border border-slate-700/50 mb-10 transition-all duration-500">
+            <div id="statusText" class="text-blue-400 text-xs font-bold mb-4 uppercase tracking-widest">System Offline</div>
+            <div id="wordDisplay" class="text-6xl font-black text-white tracking-tighter opacity-20 transition-all duration-500">READY</div>
+            <div id="liveFeedback" class="text-[11px] text-slate-500 mt-4 h-5 font-medium tracking-wide"></div>
         </div>
 
-        {/* Action Button */}
-        <div className="flex flex-col items-center gap-4">
-          <button 
-            onClick={() => startSpeechAI(currentWord)}
-            disabled={isListening}
-            className={`w-24 h-24 rounded-full flex items-center justify-center transition-all ${
-              isListening ? 'bg-yellow-500 animate-pulse scale-110' : 
-              'bg-blue-600 hover:bg-blue-500 shadow-xl active:scale-90'
-            }`}
-          >
-            {isListening ? <Mic size={40} /> : <MicOff size={40} />}
-          </button>
-          <p className="text-slate-500 text-xs uppercase tracking-widest">Tap to speak manually</p>
+        <div id="controlPanel">
+            <button id="btnConnect" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-6 rounded-2xl transition-all shadow-xl shadow-blue-900/30 active:scale-95 flex items-center justify-center gap-3 text-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728m-9.9-2.828a5 5 0 010-7.07m7.072 0a5 5 0 010 7.07M13 12a1 1 0 11-2 0 1 1 0 012 0z" />
+                </svg>
+                PAIR WITH JDY-33
+            </button>
         </div>
-      </div>
 
-      {/* Error Toast */}
-      {error && (
-        <div className="fixed bottom-6 left-6 right-6 bg-red-600 text-white p-4 rounded-2xl flex items-start gap-3 shadow-2xl z-50">
-          <AlertCircle size={24} className="flex-shrink-0" />
-          <div>
-            <p className="text-sm font-bold">Action Required</p>
-            <p className="text-xs opacity-90 leading-tight">{error}</p>
-          </div>
+        <div id="micContainer" class="hidden flex flex-col items-center mt-2">
+            <div id="micCircle" class="w-20 h-20 bg-red-500 rounded-full flex items-center justify-center mic-active mb-5 shadow-lg shadow-red-900/40">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m8 0h-8m4-14a3 3 0 00-3 3v5a3 3 0 006 0V5a3 3 0 00-3-3z" />
+                </svg>
+            </div>
+            <span class="text-red-500 text-xs font-bold uppercase tracking-widest mb-6">Listening for Voice...</span>
+            <button id="btnAbort" class="text-slate-500 text-[10px] underline uppercase tracking-[0.2em] hover:text-white transition-colors">Emergency Reset</button>
         </div>
-      )}
-
-      {/* Manual Controls for Debugging */}
-      {!isConnected && (
-        <div className="mt-4 p-4 bg-slate-800/50 rounded-xl border border-slate-700/50 flex justify-center gap-4">
-          <button 
-            onClick={() => { setCurrentWord("APPLE"); speakText("The word is APPLE"); }}
-            className="text-[10px] bg-slate-700 px-3 py-1 rounded-md uppercase tracking-tighter hover:bg-slate-600"
-          >
-            Simulate Next
-          </button>
-        </div>
-      )}
-
-      {/* Footer Instructions */}
-      <div className="mt-8 text-center text-slate-500 text-[10px] uppercase tracking-[0.2em] leading-relaxed">
-        <p>1. Ensure Site is HTTPS</p>
-        <p>2. Chrome Settings → Flags → Web Bluetooth (Enable)</p>
-        <p>3. Pair HC-05 in Phone Settings First</p>
-      </div>
+        
+        <footer class="mt-10 pt-6 border-t border-white/5">
+            <p class="text-slate-500 text-[10px] uppercase tracking-widest">Hardware Synced via WebBluetooth</p>
+        </footer>
     </div>
-  );
-};
 
-export default App;
+    <script>
+        const SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb';
+        const CHAR_UUID = '0000ffe1-0000-1000-8000-00805f9b34fb';
+        
+        let btChar;
+        const words = ["APPLE", "BANANA", "ORANGE", "CHERRY", "COMPUTER"];
+        let currentIndex = 0;
+        let isListening = false;
+        let failsafeTimer = null;
+        let finalTriggered = false;
+
+        const btnConnect = document.getElementById('btnConnect');
+        const statusText = document.getElementById('statusText');
+        const wordDisplay = document.getElementById('wordDisplay');
+        const micContainer = document.getElementById('micContainer');
+        const mainDisplay = document.getElementById('mainDisplay');
+        const btnAbort = document.getElementById('btnAbort');
+        const liveFeedback = document.getElementById('liveFeedback');
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            statusText.innerText = "Error: Browser Incompatible";
+            btnConnect.disabled = true;
+        }
+        
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'en-US';
+        recognition.continuous = false;
+        recognition.interimResults = true; 
+        recognition.maxAlternatives = 1;
+
+        btnConnect.onclick = async () => {
+            try {
+                statusText.innerText = "Requesting Access...";
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ namePrefix: 'JDY' }, { namePrefix: 'HC' }],
+                    optionalServices: [SERVICE_UUID]
+                });
+                
+                statusText.innerText = "Pairing Brain...";
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                btChar = await service.getCharacteristic(CHAR_UUID);
+
+                await btChar.startNotifications();
+                btChar.addEventListener('characteristicvaluechanged', (e) => {
+                    const val = new TextDecoder().decode(e.target.value).trim();
+                    console.log("From Arduino:", val);
+                    if(val.includes("NEXT")) startRound();
+                });
+
+                statusText.innerText = "System Online";
+                btnConnect.parentElement.classList.add('hidden');
+                wordDisplay.classList.remove('opacity-20');
+                speak("Connection established. Ready for hardware triggers.");
+            } catch (err) {
+                statusText.innerText = "Connection Failed";
+                console.error(err);
+            }
+        };
+
+        btnAbort.onclick = () => {
+            recognition.abort();
+            handleNoMatch("User Aborted");
+        };
+
+        function startRound() {
+            finalTriggered = false;
+            isListening = false;
+            if (failsafeTimer) clearTimeout(failsafeTimer);
+            try { recognition.abort(); } catch(e) {} 
+
+            const target = words[currentIndex];
+            currentIndex = (currentIndex + 1) % words.length;
+            
+            wordDisplay.innerText = target;
+            wordDisplay.classList.add('scale-110');
+            setTimeout(() => wordDisplay.classList.remove('scale-110'), 300);
+            
+            liveFeedback.innerText = "Waiting for audio...";
+            mainDisplay.classList.remove('glow-green', 'glow-red');
+            
+            statusText.innerText = "Processing Target...";
+            speak("The word is " + target + ". Say it now.");
+            
+            sendToArduino("L"); 
+
+            setTimeout(() => {
+                try {
+                    isListening = true;
+                    micContainer.classList.remove('hidden');
+                    statusText.innerText = "Mic Active";
+                    recognition.start();
+
+                    failsafeTimer = setTimeout(() => {
+                        if (isListening) recognition.stop();
+                    }, 10000); 
+
+                } catch(e) {
+                    isListening = false;
+                    micContainer.classList.add('hidden');
+                }
+            }, 2500);
+        }
+
+        recognition.onresult = (event) => {
+            if (finalTriggered) return;
+
+            let transcript = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                transcript += event.results[i][0].transcript.toUpperCase();
+            }
+
+            liveFeedback.innerText = "Detecting: " + transcript;
+            
+            if (transcript.includes(wordDisplay.innerText)) {
+                finalTriggered = true;
+                success();
+            }
+        };
+
+        function success() {
+            isListening = false;
+            if (failsafeTimer) clearTimeout(failsafeTimer);
+            recognition.stop();
+            
+            micContainer.classList.add('hidden');
+            sendToArduino("X"); 
+            sendToArduino("G"); 
+
+            statusText.innerText = "Matched Successfully";
+            mainDisplay.classList.add('glow-green');
+            speak("Excellent pronunciation!");
+        }
+
+        function handleNoMatch(reason) {
+            isListening = false;
+            finalTriggered = false;
+            if (failsafeTimer) clearTimeout(failsafeTimer);
+            
+            micContainer.classList.add('hidden');
+            sendToArduino("X"); 
+            sendToArduino("R"); 
+            
+            statusText.innerText = "Match Failed";
+            mainDisplay.classList.add('glow-red');
+            speak("That's not quite right. Listen again.");
+        }
+
+        recognition.onend = () => {
+            if (isListening && !finalTriggered) {
+                handleNoMatch("No Input Detected");
+            }
+            isListening = false;
+            micContainer.classList.add('hidden');
+        };
+
+        function speak(text) {
+            window.speechSynthesis.cancel(); 
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.rate = 0.9;
+            utterance.pitch = 1.1;
+            window.speechSynthesis.speak(utterance);
+        }
+
+        async function sendToArduino(str) {
+            if (btChar) {
+                try {
+                    await btChar.writeValue(new TextEncoder().encode(str));
+                } catch (e) { console.warn("BT Write Blocked"); }
+            }
+        }
+    </script>
+</body>
+</html>
