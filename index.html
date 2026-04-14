@@ -32,18 +32,18 @@
             PAIR WITH JDY-33
         </button>
 
-        <div id="micIcon" class="hidden flex flex-col items-center mt-6">
-            <div class="w-16 h-16 bg-red-500 rounded-full flex items-center justify-center mic-active">
+        <div id="micContainer" class="hidden flex flex-col items-center mt-6">
+            <div id="micCircle" class="w-16 h-16 bg-red-500 rounded-full flex items-center justify-center mic-active mb-4">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m8 0h-8m4-14a3 3 0 00-3 3v5a3 3 0 006 0V5a3 3 0 00-3-3z" />
                 </svg>
             </div>
-            <span class="text-red-500 text-xs font-bold mt-3 uppercase tracking-widest">Listening...</span>
+            <span class="text-red-500 text-xs font-bold uppercase tracking-widest mb-4">Listening...</span>
+            <button id="btnAbort" class="text-slate-500 text-[10px] underline uppercase tracking-widest hover:text-white">Cancel / Restart Mic</button>
         </div>
     </div>
 
     <script>
-        // JDY-33 Standard BLE UUIDs
         const SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb';
         const CHAR_UUID = '0000ffe1-0000-1000-8000-00805f9b34fb';
         
@@ -52,14 +52,15 @@
         let currentIndex = 0;
         let isListening = false;
         let failsafeTimer = null;
+        let finalTriggered = false;
 
         const btnConnect = document.getElementById('btnConnect');
         const statusText = document.getElementById('statusText');
         const wordDisplay = document.getElementById('wordDisplay');
-        const micIcon = document.getElementById('micIcon');
+        const micContainer = document.getElementById('micContainer');
         const mainDisplay = document.getElementById('mainDisplay');
+        const btnAbort = document.getElementById('btnAbort');
 
-        // Check for Web Speech API support
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
             statusText.innerText = "Browser not supported";
@@ -68,8 +69,8 @@
         
         const recognition = new SpeechRecognition();
         recognition.lang = 'en-US';
-        recognition.continuous = false;
-        recognition.interimResults = false;
+        recognition.continuous = true; // Changed to true to keep it alive
+        recognition.interimResults = true; // Catch words as they are spoken
         recognition.maxAlternatives = 1;
 
         btnConnect.onclick = async () => {
@@ -88,7 +89,6 @@
                 await btChar.startNotifications();
                 btChar.addEventListener('characteristicvaluechanged', (e) => {
                     const val = new TextDecoder().decode(e.target.value).trim();
-                    console.log("From Arduino:", val);
                     if(val.includes("NEXT")) startRound();
                 });
 
@@ -101,97 +101,99 @@
             }
         };
 
-        function startRound() {
-            if (isListening) return; 
+        btnAbort.onclick = () => {
+            handleNoMatch("Reset by User");
+        };
 
+        function startRound() {
+            if (isListening) recognition.stop(); 
+
+            finalTriggered = false;
             const target = words[currentIndex];
             currentIndex = (currentIndex + 1) % words.length;
             wordDisplay.innerText = target;
             mainDisplay.classList.remove('glow-green', 'glow-red');
             
-            statusText.innerText = "Get ready...";
+            statusText.innerText = "Listen...";
             speak("The word is " + target);
             
             sendToArduino("L"); 
 
-            // Clear any existing failsafe
             if (failsafeTimer) clearTimeout(failsafeTimer);
 
             setTimeout(() => {
                 try {
                     isListening = true;
-                    micIcon.classList.remove('hidden');
+                    micContainer.classList.remove('hidden');
                     statusText.innerText = "Listening...";
                     recognition.start();
 
-                    // FAILSAFE: If no speech is processed in 8 seconds, force stop
+                    // Failsafe shortened to 10s for better responsiveness
                     failsafeTimer = setTimeout(() => {
                         if (isListening) {
-                            console.log("Failsafe triggered: No speech detected.");
-                            recognition.stop();
-                            handleNoMatch("Silence...");
+                            handleNoMatch("Time out");
                         }
-                    }, 8000);
+                    }, 10000);
 
                 } catch(e) {
-                    console.error("Recognition error", e);
-                    isListening = false;
+                    console.error("Mic start failed", e);
                 }
-            }, 2000);
+            }, 1800);
         }
 
         recognition.onresult = (event) => {
-            if (failsafeTimer) clearTimeout(failsafeTimer);
-            isListening = false;
-            
-            const heard = event.results[0][0].transcript.toUpperCase();
-            console.log("Heard:", heard);
-            
-            micIcon.classList.add('hidden');
-            sendToArduino("X"); 
+            if (finalTriggered) return;
 
-            if (heard.includes(wordDisplay.innerText)) {
-                statusText.innerText = "Perfect!";
-                mainDisplay.classList.add('glow-green');
-                sendToArduino("G"); 
-                speak("Correct!");
-            } else {
-                handleNoMatch(heard);
+            let interimTranscript = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                interimTranscript += event.results[i][0].transcript.toUpperCase();
+            }
+
+            console.log("Live Hearing:", interimTranscript);
+            
+            // If the target word appears anywhere in the interim or final results
+            if (interimTranscript.includes(wordDisplay.innerText)) {
+                finalTriggered = true;
+                success();
             }
         };
 
-        function handleNoMatch(heardText) {
+        function success() {
             isListening = false;
             if (failsafeTimer) clearTimeout(failsafeTimer);
-            micIcon.classList.add('hidden');
+            recognition.stop();
+            
+            micContainer.classList.add('hidden');
             sendToArduino("X"); 
-            sendToArduino("R"); 
-            statusText.innerText = "Heard: " + (heardText || "Nothing");
-            mainDisplay.classList.add('glow-red');
-            speak("Try again.");
+            sendToArduino("G"); 
+
+            statusText.innerText = "Correct!";
+            mainDisplay.classList.add('glow-green');
+            speak("Correct!");
         }
 
-        recognition.onspeechend = () => {
+        function handleNoMatch(reason) {
+            isListening = false;
+            finalTriggered = false;
+            if (failsafeTimer) clearTimeout(failsafeTimer);
             recognition.stop();
-        };
+            
+            micContainer.classList.add('hidden');
+            sendToArduino("X"); 
+            sendToArduino("R"); 
+            
+            statusText.innerText = reason || "Try again";
+            mainDisplay.classList.add('glow-red');
+            speak("Not quite. Try again.");
+        }
 
         recognition.onerror = (event) => {
-            if (failsafeTimer) clearTimeout(failsafeTimer);
-            isListening = false;
-            micIcon.classList.add('hidden');
-            sendToArduino("X");
-            
-            // If it's a 'no-speech' error, don't show scary error text to child
-            if (event.error === 'no-speech') {
-                statusText.innerText = "I didn't hear you!";
-                sendToArduino("R");
-            } else {
-                statusText.innerText = "Mic Error: " + event.error;
-            }
-            console.error("Speech Error:", event.error);
+            if (event.error === 'no-speech' || event.error === 'aborted') return;
+            handleNoMatch("Mic Error");
         };
 
         function speak(text) {
+            window.speechSynthesis.cancel(); // Stop current speech
             const utterance = new SpeechSynthesisUtterance(text);
             window.speechSynthesis.speak(utterance);
         }
@@ -200,9 +202,7 @@
             if (btChar) {
                 try {
                     await btChar.writeValue(new TextEncoder().encode(str));
-                } catch (e) {
-                    console.error("BT Write Error", e);
-                }
+                } catch (e) { console.log("BT Error"); }
             }
         }
     </script>
